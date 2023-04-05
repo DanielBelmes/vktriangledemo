@@ -1,0 +1,1 @@
+{"url":"https://github.com/stavenko/nim-glm","vcsRevision":"c30414e241ad7fde9abc4f1dc7185268c4bbdbcd","files":["/glm/.gitignore","/glm/globals.nim","/glm.nimble","/glm/mat.nim","/glm/quat.nim","/glm/vec.nim","/glm.nim","/glm/detail.nim","/glm/noise.nim","/glm/mat_transform.nim"],"binaries":[],"isLink":false}

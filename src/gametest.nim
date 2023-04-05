@@ -1,4 +1,3 @@
-import nimgl/[vulkan, glfw]
 import glm/[mat, vec]
 import application
 
@@ -7,7 +6,7 @@ if isMainModule:
 
   try:
     app.run()
-  except:
+  except CatchableError:
     echo getCurrentExceptionMsg()
     quit(-1)
 

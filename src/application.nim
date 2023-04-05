@@ -1,7 +1,10 @@
 import std/options
-import nimgl/[glfw]
+import glfw
 import vulkan
 import glm/[mat, vec]
+from errors import RuntimeException
+from types import QueueFamilyIndices
+from utils import cStringToString
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -10,28 +13,19 @@ const
     WIDTH* = 800
     HEIGHT* = 600
 
-type RuntimeException = object of Exception
-
-type QueueFamilyIndices = object
-    graphicsFamily: Option[uint32]
-
 when not defined(release):
     const enableValidationLayers = true
 else:
     const enableValidationLayers = false
 
-proc toString(arr: openArray[char]): string =
-    for c in items(arr):
-        if c != '\0':
-            result = result & c
-
 type 
     HelloWorldApp* = ref object
-        window: GLFWWindow
         instance: VkInstance
+        window: GLFWWindow
         physicalDevice: VkPhysicalDevice
         graphicsQueue: VkQueue
         device: VkDevice
+        surface: VkSurfaceKHR
 
 proc initWindow(self: HelloWorldApp) =
     doAssert glfwInit()
@@ -53,7 +47,7 @@ proc checkValidationLayerSupport(): bool =
     for layerName in validationLayers:
         var layerFound: bool = false
         for layerProperties in availableLayers:
-            if cmp(layerName, toString(layerProperties.layerName)) == 0:
+            if cmp(layerName, cStringToString(layerProperties.layerName)) == 0:
                 layerFound = true
                 break
 
@@ -62,7 +56,7 @@ proc checkValidationLayerSupport(): bool =
 
     return true;
 
-proc createInstance(self: HelloWorldApp): VkInstance =
+proc createInstance(self: HelloWorldApp) =
     var appInfo = newVkApplicationInfo(
         pApplicationName = "NimGL Vulkan Example",
         applicationVersion = vkMakeVersion(1, 0, 0),
@@ -107,8 +101,12 @@ proc createInstance(self: HelloWorldApp): VkInstance =
 
     deallocCStringArray(allExtensions)
 
-    if vkCreateInstance(addr createInfo, nil, unsafeAddr result) != VKSuccess:
+    if vkCreateInstance(addr createInfo, nil, addr self.instance) != VKSuccess:
         quit("failed to create instance")
+
+proc createSurface(self: HelloWorldApp, instance: VkInstance) =
+    if glfwCreateWindowSurface(instance, self.window, nil, addr self.surface) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed it create window surface")
 
 proc findQueueFamilies(self: HelloWorldApp, device: VkPhysicalDevice): QueueFamilyIndices =
     var queueFamilyCount: uint32 = 0
@@ -143,7 +141,7 @@ proc pickPhysicalDevice(self: HelloWorldApp) =
 
     raise newException(RuntimeException, "failed to find a suitable GPU!")
 
-proc createLogicalDevice(self: HelloWorldApp): VkDevice =
+proc createLogicalDevice(self: HelloWorldApp) =
     let
         indices = self.findQueueFamilies(self.physicalDevice)
         queueFamily = indices.graphicsFamily.get
@@ -171,21 +169,22 @@ proc createLogicalDevice(self: HelloWorldApp): VkDevice =
         ppEnabledExtensionNames = deviceExts
         )
 
-    if vkCreateDevice(self.physicalDevice, deviceCreateInfo.addr, nil, result.addr) != VKSuccess:
+    if vkCreateDevice(self.physicalDevice, deviceCreateInfo.addr, nil, self.device.addr) != VKSuccess:
         echo "failed to create logical device"
 
     deallocCStringArray(deviceExts)
 
-    vkGetDeviceQueue(result, indices.graphicsFamily.get, 0, addr self.graphicsQueue)
+    vkGetDeviceQueue(self.device, indices.graphicsFamily.get, 0, addr self.graphicsQueue)
 
 
 
 proc initVulkan(self: HelloWorldApp) =
     vkPreload()
-    self.instance = self.createInstance()
+    self.createInstance()
     doAssert vkInit(self.instance)
+    self.createSurface(self.instance)
     self.pickPhysicalDevice();
-    self.device = self.createLogicalDevice();
+    self.createLogicalDevice();
 
 proc mainLoop(self: HelloWorldApp) =
     while not windowShouldClose(self.window):
