@@ -5,6 +5,7 @@ author        = "DanielBelmes"
 description   = "wave function collapse"
 license       = "MIT"
 srcDir        = "src"
+binDir        = "build"
 bin           = @["gametest"]
 
 

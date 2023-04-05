@@ -6,6 +6,7 @@ import glm/[mat, vec]
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
     vkInstanceExtensions = ["VK_KHR_portability_enumeration"]
+    deviceExtensions = []
     WIDTH* = 800
     HEIGHT* = 600
 
@@ -29,6 +30,8 @@ type
         window: GLFWWindow
         instance: VkInstance
         physicalDevice: VkPhysicalDevice
+        graphicsQueue: VkQueue
+        device: VkDevice
 
 proc initWindow(self: HelloWorldApp) =
     doAssert glfwInit()
@@ -43,7 +46,6 @@ proc initWindow(self: HelloWorldApp) =
 proc checkValidationLayerSupport(): bool =
     var layerCount: uint32
     discard vkEnumerateInstanceLayerProperties(addr layerCount, nil);
-    echo layerCount
 
     var availableLayers = newSeq[VkLayerProperties](layerCount)
     discard vkEnumerateInstanceLayerProperties(addr layerCount, addr availableLayers[0]);
@@ -118,6 +120,7 @@ proc findQueueFamilies(self: HelloWorldApp, device: VkPhysicalDevice): QueueFami
     for queueFamily in queueFamilies:
         if (queueFamily.queueFlags.uint32 and VkQueueGraphicsBit.uint32) > 0'u32:
             result.graphicsFamily = some(index)
+            break
 
 proc isDeviceSuitable(self: HelloWorldApp, device: VkPhysicalDevice): bool =
     var deviceProperties: VkPhysicalDeviceProperties
@@ -140,6 +143,41 @@ proc pickPhysicalDevice(self: HelloWorldApp) =
 
     raise newException(RuntimeException, "failed to find a suitable GPU!")
 
+proc createLogicalDevice(self: HelloWorldApp): VkDevice =
+    let
+        indices = self.findQueueFamilies(self.physicalDevice)
+        queueFamily = indices.graphicsFamily.get
+    var
+        queuePriority = 1f
+        queueCreateInfos = newSeq[VkDeviceQueueCreateInfo]()
+
+    let deviceQueueCreateInfo: VkDeviceQueueCreateInfo = newVkDeviceQueueCreateInfo(
+        queueFamilyIndex = queueFamily,
+        queueCount = 1,
+        pQueuePriorities = queuePriority.addr
+    )
+    queueCreateInfos.add(deviceQueueCreateInfo)
+
+    var
+        deviceFeatures = newSeq[VkPhysicalDeviceFeatures](1)
+        deviceExts = allocCStringArray(deviceExtensions)
+        deviceCreateInfo = newVkDeviceCreateInfo(
+        pQueueCreateInfos = queueCreateInfos[0].addr,
+        queueCreateInfoCount = queueCreateInfos.len.uint32,
+        pEnabledFeatures = deviceFeatures[0].addr,
+        enabledExtensionCount = deviceExtensions.len.uint32,
+        enabledLayerCount = 0,
+        ppEnabledLayerNames = nil,
+        ppEnabledExtensionNames = deviceExts
+        )
+
+    if vkCreateDevice(self.physicalDevice, deviceCreateInfo.addr, nil, result.addr) != VKSuccess:
+        echo "failed to create logical device"
+
+    deallocCStringArray(deviceExts)
+
+    vkGetDeviceQueue(result, indices.graphicsFamily.get, 0, addr self.graphicsQueue)
+
 
 
 proc initVulkan(self: HelloWorldApp) =
@@ -147,12 +185,14 @@ proc initVulkan(self: HelloWorldApp) =
     self.instance = self.createInstance()
     doAssert vkInit(self.instance)
     self.pickPhysicalDevice();
+    self.device = self.createLogicalDevice();
 
 proc mainLoop(self: HelloWorldApp) =
     while not windowShouldClose(self.window):
         glfwPollEvents()
 
 proc cleanup(self: HelloWorldApp) = 
+    vkDestroyDevice(self.device, nil); #destroy device before instance
     vkDestroyInstance(self.instance, nil);
     self.window.destroyWindow()
     glfwTerminate()
