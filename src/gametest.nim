@@ -2,7 +2,7 @@ import glm/[mat, vec]
 import application
 
 if isMainModule:
-  var app: HelloWorldApp = HelloWorldApp()
+  var app: HelloWorldApp = new HelloWorldApp
 
   try:
     app.run()
@@ -13,4 +13,3 @@ if isMainModule:
   var matrix: Mat4[uint32]
   var vec: Vec4[uint32]
   var test = matrix * vec
-  echo test

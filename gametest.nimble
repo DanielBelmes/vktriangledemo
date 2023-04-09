@@ -14,8 +14,8 @@ bin           = @["gametest"]
 
 requires "nim >= 1.6.8"
 requires "glm >= 1.0.0"
-requires "glfw >= 1.0.0"
-requires "vulkan >= 1.0.0"
+requires "https://github.com/DanielBelmes/glfw#head"
+requires "https://github.com/DanielBelmes/vulkan#head"
 
 before build:
   exec("glslc src/shaders/shader.vert -o src/shaders/vert.spv")
