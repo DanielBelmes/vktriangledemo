@@ -38,6 +38,12 @@ type
         pipelineLayout: VkPipelineLayout
         renderPass: VkRenderPass
         graphicsPipeline: VkPipeline
+        swapChainFramebuffers: seq[VkFramebuffer]
+        commandPool: VkCommandPool
+        commandBuffer: VkCommandBuffer
+        imageAvailableSemaphore: VkSemaphore
+        renderFinishedSemaphore: VkSemaphore
+        inFlightFence: VkFence
 
 proc initWindow(self: HelloWorldApp) =
     doAssert glfwInit()
@@ -485,6 +491,132 @@ proc createGraphicsPipeline(self: HelloWorldApp) =
     vkDestroyShaderModule(self.device, vertShaderModule, nil)
     vkDestroyShaderModule(self.device, fragShaderModule, nil)
 
+proc createFrameBuffers(self: HelloWorldApp) =
+    self.swapChainFramebuffers.setLen(self.swapChainImageViews.len)
+
+    for index, view in self.swapChainImageViews:
+        var
+            attachments = [self.swapChainImageViews[index]]
+            framebufferInfo = newVkFramebufferCreateInfo(
+                sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                renderPass = self.renderPass,
+                attachmentCount = attachments.len.uint32,
+                pAttachments = attachments[0].addr,
+                width = self.swapChainExtent.width,
+                height = self.swapChainExtent.height,
+                layers = 1,
+            )
+        if vkCreateFramebuffer(self.device, framebufferInfo.addr, nil, addr self.swapChainFramebuffers[index]) != VK_SUCCESS:
+            quit("failed to create framebuffer")
+
+proc createCommandPool(self: HelloWorldApp) =
+    var
+        indicies: QueueFamilyIndices = self.findQueueFamilies(self.physicalDevice) # I should just save this info. Does it change?
+        poolInfo: VkCommandPoolCreateInfo = newVkCommandPoolCreateInfo(
+            flags = VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
+            queueFamilyIndex = indicies.graphicsFamily.get
+        )
+    if vkCreateCommandPool(self.device, addr poolInfo, nil, addr self.commandPool) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to create command pool!")
+
+proc createCommandBuffer(self: HelloWorldApp) =
+    var allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
+        commandPool = self.commandPool,
+        level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        commandBufferCount = 1
+    )
+    if vkAllocateCommandBuffers(self.device, addr allocInfo, addr self.commandBuffer) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to allocate command buffers!")
+
+proc recordCommandBuffer(self: HelloWorldApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
+    var beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
+        flags = VkCommandBufferUsageFlags(0),
+        pInheritanceInfo = nil
+    )
+    if vkBeginCOmmandBuffer(commandBuffer, addr beginInfo) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to begin recording command buffer!")
+
+    var
+        clearColor: VkClearValue = VkClearValue(color: VkClearColorValue(float32: [0f, 0f, 0f, 1f]))
+        renderPassInfo: VkRenderPassBeginInfo = newVkRenderPassBeginInfo(
+            renderPass = self.renderPass,
+            framebuffer = self.swapChainFrameBuffers[imageIndex],
+            renderArea = VkRect2D(
+                offset: VkOffset2d(x: 0,y: 0),
+                extent: self.swapChainExtent
+            ),
+            clearValueCount = 1,
+            pClearValues = addr clearColor
+        )
+    vkCmdBeginRenderPass(commandBuffer, renderPassInfo.addr, VK_SUBPASS_CONTENTS_INLINE)
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline)
+    var
+        viewport: VkViewport = newVkViewport(
+            x = 0f,
+            y = 0f,
+            width = cast[float32](self.swapChainExtent.width),
+            height = cast[float32](self.swapChainExtent.height),
+            minDepth = 0f,
+            maxDepth = 1f
+        )
+        scissor: VkRect2D = newVkRect2D(
+            offset = VkOffset2D(x: 0, y: 0),
+            extent = self.swapChainExtent
+        )
+    vkCmdSetViewport(commandBuffer, 0, 1, addr viewport)
+    vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0)
+    vkCmdEndRenderPass(commandBuffer)
+    if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
+        quit("failed to record command buffer")
+
+proc createSyncObjects(self: HelloWorldApp) =
+    var
+        semaphoreInfo: VkSemaphoreCreateInfo = newVkSemaphoreCreateInfo()
+        fenceInfo: VkFenceCreateInfo = newVkFenceCreateInfo(
+            flags = VkFenceCreateFlags(VK_FENCE_CREATE_SIGNALED_BIT)
+        )
+    if  (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.imageAvailableSemaphore) != VK_SUCCESS) or 
+        (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.renderFinishedSemaphore) != VK_SUCCESS) or 
+        (vkCreateFence(self.device, addr fenceInfo, nil, addr self.inFlightFence) != VK_SUCCESS):
+            raise newException(RuntimeException, "failed to create sync Objects!")
+
+proc drawFrame(self: HelloWorldApp) =
+    discard vkWaitForFences(self.device, 1, addr self.inFlightFence, VkBool32(VK_TRUE), uint64.high)
+    discard vkResetFences(self.device, 1 , addr self.inFlightFence)
+    var imageIndex: uint32
+    discard vkAcquireNextImageKHR(self.device, self.swapChain, uint64.high, self.imageAvailableSemaphore, VkFence(0), addr imageIndex)
+    discard vkResetCommandBuffer(self.commandBuffer, VkCommandBufferResetFlags(0))
+    self.recordCommandBuffer(self.commandBuffer, imageIndex)
+    var
+        waitSemaphores: array[1, VkSemaphore] = [self.imageAvailableSemaphore]
+        waitStages: array[1, VkPipelineStageFlags] = [VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)]
+        signalSemaphores: array[1, VkSemaphore] = [self.renderFinishedSemaphore]
+        submitInfo: VkSubmitInfo = newVkSubmitInfo(
+            waitSemaphoreCount = waitSemaphores.len.uint32,
+            pWaitSemaphores = addr waitSemaphores[0],
+            pWaitDstStageMask = addr waitStages[0],
+            commandBufferCount = 1,
+            pCommandBuffers = addr self.commandBuffer,
+            signalSemaphoreCount = 1,
+            pSignalSemaphores = addr signalSemaphores[0]
+        )
+    if vkQueueSubmit(self.graphicsQueue, 1, addr submitInfo, self.inFlightFence) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to submit draw command buffer")
+    var
+        swapChains: array[1, VkSwapchainKHR] = [self.swapChain]
+        presentInfo: VkPresentInfoKHR = newVkPresentInfoKHR(
+            sType = cast[VkStructureType](1000001001), #VK_STRUCTURE_TYPE_PRESENT_INFO_KHR not defined in vulkan.nim
+            waitSemaphoreCount = 1,
+            pWaitSemaphores = addr signalSemaphores[0],
+            swapchainCount = 1,
+            pSwapchains = addr swapChains[0],
+            pImageIndices = addr imageIndex,
+            pResults = nil
+        )
+    discard vkQueuePresentKHR(self.presentQueue, addr presentInfo)
+
+
 proc initVulkan(self: HelloWorldApp) =
     self.createInstance()
     self.createSurface()
@@ -494,14 +626,27 @@ proc initVulkan(self: HelloWorldApp) =
     self.createImageViews()
     self.createRenderPass()
     self.createGraphicsPipeline()
+    self.createFrameBuffers()
+    self.createCommandPool()
+    self.createCommandBuffer()
+    self.createSyncObjects()
 
 proc mainLoop(self: HelloWorldApp) =
     while not windowShouldClose(self.window):
         glfwPollEvents()
+        self.drawFrame()
+    discard vkDeviceWaitIdle(self.device);
 
 proc cleanup(self: HelloWorldApp) =
+    vkDestroySemaphore(self.device, self.imageAvailableSemaphore, nil)
+    vkDestroySemaphore(self.device, self.renderFinishedSemaphore, nil)
+    vkDestroyFence(self.device, self.inFlightFence, nil)
+    vkDestroyCommandPool(self.device, self.commandPool, nil)
+    for framebuffer in self.swapChainFramebuffers:
+        vkDestroyFramebuffer(self.device, framebuffer, nil)
     vkDestroyPipeline(self.device, self.graphicsPipeline, nil)
     vkDestroyPipelineLayout(self.device, self.pipelineLayout, nil)
+    vkDestroyRenderPass(self.device, self.renderPass, nil)
     for imageView in self.swapChainImageViews:
         vkDestroyImageView(self.device, imageView, nil)
     vkDestroySwapchainKHR(self.device, self.swapChain, nil)
