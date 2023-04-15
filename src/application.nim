@@ -4,15 +4,14 @@ import glfw
 import sets
 import bitops
 import vulkan
-#import glm/[mat, vec]
 from errors import RuntimeException
 import types
 from utils import cStringToString
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
-    vkInstanceExtensions = ["VK_KHR_portability_enumeration"]
-    deviceExtensions = ["VK_KHR_portability_subset","VK_KHR_swapchain"]
+    vkInstanceExtensions = [VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
+    deviceExtensions = [VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,VK_KHR_SWAPCHAIN_EXTENSION_NAME]
     WIDTH* = 800
     HEIGHT* = 600
 
@@ -22,7 +21,7 @@ else:
     const enableValidationLayers = false
 
 type
-    HelloWorldApp* = ref object
+    VulkanTriangleApp* = ref object
         instance: VkInstance
         window: GLFWWindow
         surface: VkSurfaceKHR
@@ -45,7 +44,7 @@ type
         renderFinishedSemaphore: VkSemaphore
         inFlightFence: VkFence
 
-proc initWindow(self: HelloWorldApp) =
+proc initWindow(self: VulkanTriangleApp) =
     doAssert glfwInit()
     doAssert glfwVulkanSupported()
 
@@ -74,13 +73,13 @@ proc checkValidationLayerSupport(): bool =
 
     return true
 
-proc createInstance(self: HelloWorldApp) =
+proc createInstance(self: VulkanTriangleApp) =
     var appInfo = newVkApplicationInfo(
         pApplicationName = "NimGL Vulkan Example",
         applicationVersion = vkMakeVersion(1, 0, 0),
         pEngineName = "No Engine",
         engineVersion = vkMakeVersion(1, 0, 0),
-        apiVersion = vkApiVersion1_1
+        apiVersion = VK_API_VERSION_1_1
     )
 
     var glfwExtensionCount: uint32 = 0
@@ -123,11 +122,11 @@ proc createInstance(self: HelloWorldApp) =
     if vkCreateInstance(addr createInfo, nil, addr self.instance) != VKSuccess:
         quit("failed to create instance")
 
-proc createSurface(self: HelloWorldApp) =
+proc createSurface(self: VulkanTriangleApp) =
     if glfwCreateWindowSurface(self.instance, self.window, nil, addr self.surface) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create window surface")
 
-proc checkDeviceExtensionSupport(self: HelloWorldApp, pDevice: VkPhysicalDevice): bool =
+proc checkDeviceExtensionSupport(self: VulkanTriangleApp, pDevice: VkPhysicalDevice): bool =
     var extensionCount: uint32
     discard vkEnumerateDeviceExtensionProperties(pDevice, nil, addr extensionCount, nil)
     var availableExtensions: seq[VkExtensionProperties] = newSeq[VkExtensionProperties](extensionCount)
@@ -138,7 +137,7 @@ proc checkDeviceExtensionSupport(self: HelloWorldApp, pDevice: VkPhysicalDevice)
         requiredExtensions.excl(extension.extensionName.cStringToString)
     return requiredExtensions.len == 0
 
-proc querySwapChainSupport(self: HelloWorldApp, pDevice: VkPhysicalDevice): SwapChainSupportDetails =
+proc querySwapChainSupport(self: VulkanTriangleApp, pDevice: VkPhysicalDevice): SwapChainSupportDetails =
     discard vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pDevice,self.surface,addr result.capabilities)
     var formatCount: uint32
     discard vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice, self.surface, addr formatCount, nil)
@@ -152,19 +151,19 @@ proc querySwapChainSupport(self: HelloWorldApp, pDevice: VkPhysicalDevice): Swap
         result.presentModes.setLen(presentModeCount)
         discard vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice, self.surface, presentModeCount.addr, result.presentModes[0].addr)
 
-proc chooseSwapSurfaceFormat(self: HelloWorldApp, availableFormats: seq[VkSurfaceFormatKHR]): VkSurfaceFormatKHR =
+proc chooseSwapSurfaceFormat(self: VulkanTriangleApp, availableFormats: seq[VkSurfaceFormatKHR]): VkSurfaceFormatKHR =
     for format in availableFormats:
         if format.format == VK_FORMAT_B8G8R8A8_SRGB and format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
             return format
     return availableFormats[0]
 
-proc chooseSwapPresnetMode(self: HelloWorldApp, availablePresentModes: seq[VkPresentModeKHR]): VkPresentModeKHR =
+proc chooseSwapPresnetMode(self: VulkanTriangleApp, availablePresentModes: seq[VkPresentModeKHR]): VkPresentModeKHR =
     for presentMode in availablePresentModes:
         if presentMode == VK_PRESENT_MODE_MAILBOX_KHR:
             return presentMode
     return VK_PRESENT_MODE_FIFO_KHR
 
-proc chooseSwapExtent(self: HelloWorldApp, capabilities: VkSurfaceCapabilitiesKHR): VkExtent2D =
+proc chooseSwapExtent(self: VulkanTriangleApp, capabilities: VkSurfaceCapabilitiesKHR): VkExtent2D =
     if capabilities.currentExtent.width != uint32.high:
         return capabilities.currentExtent
     else:
@@ -178,7 +177,7 @@ proc chooseSwapExtent(self: HelloWorldApp, capabilities: VkSurfaceCapabilitiesKH
                                 capabilities.minImageExtent.height,
                                 capabilities.maxImageExtent.height)
 
-proc findQueueFamilies(self: HelloWorldApp, pDevice: VkPhysicalDevice): QueueFamilyIndices =
+proc findQueueFamilies(self: VulkanTriangleApp, pDevice: VkPhysicalDevice): QueueFamilyIndices =
     var queueFamilyCount: uint32 = 0
     vkGetPhysicalDeviceQueueFamilyProperties(pDevice, addr queueFamilyCount, nil)
     var queueFamilies: seq[VkQueueFamilyProperties] = newSeq[VkQueueFamilyProperties](queueFamilyCount) # [TODO] this pattern can be templated
@@ -196,7 +195,7 @@ proc findQueueFamilies(self: HelloWorldApp, pDevice: VkPhysicalDevice): QueueFam
             break
         index.inc
 
-proc isDeviceSuitable(self: HelloWorldApp, pDevice: VkPhysicalDevice): bool =
+proc isDeviceSuitable(self: VulkanTriangleApp, pDevice: VkPhysicalDevice): bool =
     var deviceProperties: VkPhysicalDeviceProperties
     vkGetPhysicalDeviceProperties(pDevice, deviceProperties.addr)
     var indicies: QueueFamilyIndices = self.findQueueFamilies(pDevice)
@@ -207,7 +206,7 @@ proc isDeviceSuitable(self: HelloWorldApp, pDevice: VkPhysicalDevice): bool =
         swapChainAdequate = swapChainSupport.formats.len != 0 and swapChainSupport.presentModes.len != 0
     return indicies.isComplete and extensionsSupported and swapChainAdequate
 
-proc pickPhysicalDevice(self: HelloWorldApp) =
+proc pickPhysicalDevice(self: VulkanTriangleApp) =
     var deviceCount: uint32 = 0
     discard vkEnumeratePhysicalDevices(self.instance, addr deviceCount, nil)
     if(deviceCount == 0):
@@ -221,7 +220,7 @@ proc pickPhysicalDevice(self: HelloWorldApp) =
 
     raise newException(RuntimeException, "failed to find a suitable GPU!")
 
-proc createLogicalDevice(self: HelloWorldApp) =
+proc createLogicalDevice(self: VulkanTriangleApp) =
     let
         indices = self.findQueueFamilies(self.physicalDevice)
         uniqueQueueFamilies = [indices.graphicsFamily.get, indices.presentFamily.get].toHashSet
@@ -260,7 +259,7 @@ proc createLogicalDevice(self: HelloWorldApp) =
     vkGetDeviceQueue(self.device, indices.presentFamily.get, 0, addr self.presentQueue)
 
 
-proc createSwapChain(self: HelloWorldApp) =
+proc createSwapChain(self: VulkanTriangleApp) =
     let swapChainSupport: SwapChainSupportDetails = self.querySwapChainSupport(self.physicalDevice)
 
     let surfaceFormat: VkSurfaceFormatKHR = self.chooseSwapSurfaceFormat(swapChainSupport.formats)
@@ -273,7 +272,7 @@ proc createSwapChain(self: HelloWorldApp) =
         imageCount = swapChainSupport.capabilities.maxImageCount
 
     var createInfo = VkSwapchainCreateInfoKHR(
-        sType: cast[VkStructureType](1000001000), # VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR
+        sType: VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         surface: self.surface,
         minImageCount: imageCount,
         imageFormat: surfaceFormat.format,
@@ -285,7 +284,7 @@ proc createSwapChain(self: HelloWorldApp) =
         compositeAlpha: VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         presentMode: presentMode,
         clipped: VKBool32(VK_TRUE),
-        oldSwapchain: VkSwapchainKHR(0)#VK_NULL_HANDLE [TODO] Fix in vulkan to have definition
+        oldSwapchain: VkSwapchainKHR(VK_NULL_HANDLE)
     )
     let indices = self.findQueueFamilies(self.physicalDevice)
     var queueFamilyIndicies = [indices.graphicsFamily.get, indices.presentFamily.get]
@@ -307,7 +306,7 @@ proc createSwapChain(self: HelloWorldApp) =
     self.swapChainImageFormat = surfaceFormat.format
     self.swapChainExtent = extent
 
-proc createImageViews(self: HelloWorldApp) =
+proc createImageViews(self: VulkanTriangleApp) =
     self.swapChainImageViews.setLen(self.swapChainImages.len)
     for index, swapChainImage in self.swapChainImages:
         var createInfo = newVkImageViewCreateInfo(
@@ -320,7 +319,7 @@ proc createImageViews(self: HelloWorldApp) =
         if vkCreateImageView(self.device, addr createInfo, nil, addr self.swapChainImageViews[index]) != VK_SUCCESS:
             raise newException(RuntimeException, "failed to create image views")
 
-proc createShaderModule(self: HelloWorldApp, code: string) : VkShaderModule =
+proc createShaderModule(self: VulkanTriangleApp, code: string) : VkShaderModule =
     var createInfo = newVkShaderModuleCreateInfo(
         codeSize = code.len.uint32,
         pCode = cast[ptr uint32](code[0].unsafeAddr) #Hopefully reading bytecode as string is alright
@@ -328,7 +327,7 @@ proc createShaderModule(self: HelloWorldApp, code: string) : VkShaderModule =
     if vkCreateShaderModule(self.device, addr createInfo, nil, addr result) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create shader module")
 
-proc createRenderPass(self: HelloWorldApp) =
+proc createRenderPass(self: VulkanTriangleApp) =
     var
         colorAttachment: VkAttachmentDescription = newVkAttachmentDescription(
             format = self.swapChainImageFormat,
@@ -338,7 +337,7 @@ proc createRenderPass(self: HelloWorldApp) =
             stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            finalLayout = cast[VkImageLayout](1000001002), # VK_IMAGE_LAYOUT_PRESENT_SRC_KHR Why is this not defined in vulkan.nim
+            finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         )
         colorAttachmentRef: VkAttachmentReference = newVkAttachmentReference(
             attachment = 0,
@@ -368,7 +367,7 @@ proc createRenderPass(self: HelloWorldApp) =
     if vkCreateRenderPass(self.device, addr renderPassInfo, nil, addr self.renderPass) != VK_SUCCESS:
         quit("failed to create render pass")
 
-proc createGraphicsPipeline(self: HelloWorldApp) =
+proc createGraphicsPipeline(self: VulkanTriangleApp) =
     const
         vertShaderCode: string = staticRead("./shaders/vert.spv")
         fragShaderCode: string = staticRead("./shaders/frag.spv")
@@ -422,7 +421,7 @@ proc createGraphicsPipeline(self: HelloWorldApp) =
             pScissors = addr scissor
         )
         rasterizer: VkPipelineRasterizationStateCreateInfo = newVkPipelineRasterizationStateCreateInfo(
-            depthClampEnable = VkBool32(VK_FALSE), # [TODO] VkBool32 should really be an enum
+            depthClampEnable = VkBool32(VK_FALSE),
             rasterizerDiscardEnable = VkBool32(VK_FALSE),
             polygonMode = VK_POLYGON_MODE_FILL,
             lineWidth = 1.float,
@@ -491,7 +490,7 @@ proc createGraphicsPipeline(self: HelloWorldApp) =
     vkDestroyShaderModule(self.device, vertShaderModule, nil)
     vkDestroyShaderModule(self.device, fragShaderModule, nil)
 
-proc createFrameBuffers(self: HelloWorldApp) =
+proc createFrameBuffers(self: VulkanTriangleApp) =
     self.swapChainFramebuffers.setLen(self.swapChainImageViews.len)
 
     for index, view in self.swapChainImageViews:
@@ -509,7 +508,7 @@ proc createFrameBuffers(self: HelloWorldApp) =
         if vkCreateFramebuffer(self.device, framebufferInfo.addr, nil, addr self.swapChainFramebuffers[index]) != VK_SUCCESS:
             quit("failed to create framebuffer")
 
-proc createCommandPool(self: HelloWorldApp) =
+proc createCommandPool(self: VulkanTriangleApp) =
     var
         indicies: QueueFamilyIndices = self.findQueueFamilies(self.physicalDevice) # I should just save this info. Does it change?
         poolInfo: VkCommandPoolCreateInfo = newVkCommandPoolCreateInfo(
@@ -519,7 +518,7 @@ proc createCommandPool(self: HelloWorldApp) =
     if vkCreateCommandPool(self.device, addr poolInfo, nil, addr self.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
 
-proc createCommandBuffer(self: HelloWorldApp) =
+proc createCommandBuffer(self: VulkanTriangleApp) =
     var allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
         commandPool = self.commandPool,
         level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
@@ -528,7 +527,7 @@ proc createCommandBuffer(self: HelloWorldApp) =
     if vkAllocateCommandBuffers(self.device, addr allocInfo, addr self.commandBuffer) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to allocate command buffers!")
 
-proc recordCommandBuffer(self: HelloWorldApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
+proc recordCommandBuffer(self: VulkanTriangleApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
     var beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
         flags = VkCommandBufferUsageFlags(0),
         pInheritanceInfo = nil
@@ -570,7 +569,7 @@ proc recordCommandBuffer(self: HelloWorldApp, commandBuffer: VkCommandBuffer, im
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
         quit("failed to record command buffer")
 
-proc createSyncObjects(self: HelloWorldApp) =
+proc createSyncObjects(self: VulkanTriangleApp) =
     var
         semaphoreInfo: VkSemaphoreCreateInfo = newVkSemaphoreCreateInfo()
         fenceInfo: VkFenceCreateInfo = newVkFenceCreateInfo(
@@ -581,7 +580,7 @@ proc createSyncObjects(self: HelloWorldApp) =
         (vkCreateFence(self.device, addr fenceInfo, nil, addr self.inFlightFence) != VK_SUCCESS):
             raise newException(RuntimeException, "failed to create sync Objects!")
 
-proc drawFrame(self: HelloWorldApp) =
+proc drawFrame(self: VulkanTriangleApp) =
     discard vkWaitForFences(self.device, 1, addr self.inFlightFence, VkBool32(VK_TRUE), uint64.high)
     discard vkResetFences(self.device, 1 , addr self.inFlightFence)
     var imageIndex: uint32
@@ -606,7 +605,6 @@ proc drawFrame(self: HelloWorldApp) =
     var
         swapChains: array[1, VkSwapchainKHR] = [self.swapChain]
         presentInfo: VkPresentInfoKHR = newVkPresentInfoKHR(
-            sType = cast[VkStructureType](1000001001), #VK_STRUCTURE_TYPE_PRESENT_INFO_KHR not defined in vulkan.nim
             waitSemaphoreCount = 1,
             pWaitSemaphores = addr signalSemaphores[0],
             swapchainCount = 1,
@@ -617,7 +615,7 @@ proc drawFrame(self: HelloWorldApp) =
     discard vkQueuePresentKHR(self.presentQueue, addr presentInfo)
 
 
-proc initVulkan(self: HelloWorldApp) =
+proc initVulkan(self: VulkanTriangleApp) =
     self.createInstance()
     self.createSurface()
     self.pickPhysicalDevice()
@@ -631,13 +629,13 @@ proc initVulkan(self: HelloWorldApp) =
     self.createCommandBuffer()
     self.createSyncObjects()
 
-proc mainLoop(self: HelloWorldApp) =
+proc mainLoop(self: VulkanTriangleApp) =
     while not windowShouldClose(self.window):
         glfwPollEvents()
         self.drawFrame()
     discard vkDeviceWaitIdle(self.device);
 
-proc cleanup(self: HelloWorldApp) =
+proc cleanup(self: VulkanTriangleApp) =
     vkDestroySemaphore(self.device, self.imageAvailableSemaphore, nil)
     vkDestroySemaphore(self.device, self.renderFinishedSemaphore, nil)
     vkDestroyFence(self.device, self.inFlightFence, nil)
@@ -656,7 +654,7 @@ proc cleanup(self: HelloWorldApp) =
     self.window.destroyWindow()
     glfwTerminate()
 
-proc run*(self: HelloWorldApp) =
+proc run*(self: VulkanTriangleApp) =
     self.initWindow()
     self.initVulkan()
     self.mainLoop()
