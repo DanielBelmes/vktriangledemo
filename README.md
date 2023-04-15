@@ -16,6 +16,6 @@ nimble build; ./build/vktriangledemo
 
 ## License
 
-[MIT License](https://github.com/nimgl/nimgl/blob/master/LICENSE)
+[MIT License](https://github.com/DanielBelmes/vktriangledemo/blob/main/LICENSE)
 
 Feel free to fork and improve, rewrite, use as a base, etc...
