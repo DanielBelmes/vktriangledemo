@@ -14,6 +14,7 @@ const
     deviceExtensions = [VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,VK_KHR_SWAPCHAIN_EXTENSION_NAME]
     WIDTH* = 800
     HEIGHT* = 600
+    MAX_FRAMES_IN_FLIGHT: uint32 = 2
 
 when not defined(release):
     const enableValidationLayers = true
@@ -39,10 +40,12 @@ type
         graphicsPipeline: VkPipeline
         swapChainFramebuffers: seq[VkFramebuffer]
         commandPool: VkCommandPool
-        commandBuffer: VkCommandBuffer
-        imageAvailableSemaphore: VkSemaphore
-        renderFinishedSemaphore: VkSemaphore
-        inFlightFence: VkFence
+        commandBuffers: seq[VkCommandBuffer]
+        imageAvailableSemaphores: seq[VkSemaphore]
+        renderFinishedSemaphores: seq[VkSemaphore]
+        inFlightFences: seq[VkFence]
+        currentFrame: uint32
+        framebufferResized: bool
 
 proc initWindow(self: VulkanTriangleApp) =
     doAssert glfwInit()
@@ -53,6 +56,12 @@ proc initWindow(self: VulkanTriangleApp) =
     self.window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nil, nil, icon = false)
     if self.window == nil:
         quit(-1)
+    setWindowUserPointer(self.window, unsafeAddr self);
+    discard setFramebufferSizeCallback(self.window, cast[GLFWFramebuffersizeFun](framebufferResizeCallback))
+
+proc framebufferResizeCallback(window: GLFWWindow, width: int, height: int) {.cdecl.} =
+    let app = cast[ptr VulkanTriangleApp](getWindowUserPointer(window))
+    app.framebufferResized = true
 
 proc checkValidationLayerSupport(): bool =
     var layerCount: uint32
@@ -405,8 +414,8 @@ proc createGraphicsPipeline(self: VulkanTriangleApp) =
         viewport: VkViewPort = newVkViewport(
             x = 0.float,
             y = 0.float,
-            width = self.swapChainExtent.width.float,
-            height = self.swapChainExtent.height.float,
+            width = self.swapChainExtent.width.float32,
+            height = self.swapChainExtent.height.float32,
             minDepth = 0.float,
             maxDepth = 1.float
         )
@@ -477,7 +486,7 @@ proc createGraphicsPipeline(self: VulkanTriangleApp) =
             pMultisampleState = multisampling.addr,
             pDepthStencilState = nil, # optional
             pColorBlendState = colorBlending.addr,
-            pDynamicState = nil, # optional
+            pDynamicState = dynamicState.addr, # optional
             pTessellationState = nil,
             layout = self.pipelineLayout,
             renderPass = self.renderPass,
@@ -508,6 +517,29 @@ proc createFrameBuffers(self: VulkanTriangleApp) =
         if vkCreateFramebuffer(self.device, framebufferInfo.addr, nil, addr self.swapChainFramebuffers[index]) != VK_SUCCESS:
             quit("failed to create framebuffer")
 
+proc cleanupSwapChain(self: VulkanTriangleApp) =
+    for framebuffer in self.swapChainFramebuffers:
+        vkDestroyFramebuffer(self.device, framebuffer, nil)
+    for imageView in self.swapChainImageViews:
+        vkDestroyImageView(self.device, imageView, nil)
+    vkDestroySwapchainKHR(self.device, self.swapChain, nil)
+
+proc recreateSwapChain(self: VulkanTriangleApp) =
+    var
+        width: int32 = 0
+        height: int32 = 0
+    getFramebufferSize(self.window, addr width, addr height)
+    while width == 0 or height == 0:
+        getFramebufferSize(self.window, addr width, addr height)
+        glfwWaitEvents()
+    discard vkDeviceWaitIdle(self.device)
+
+    self.cleanupSwapChain()
+
+    self.createSwapChain()
+    self.createImageViews()
+    self.createFramebuffers()
+
 proc createCommandPool(self: VulkanTriangleApp) =
     var
         indicies: QueueFamilyIndices = self.findQueueFamilies(self.physicalDevice) # I should just save this info. Does it change?
@@ -518,13 +550,14 @@ proc createCommandPool(self: VulkanTriangleApp) =
     if vkCreateCommandPool(self.device, addr poolInfo, nil, addr self.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
 
-proc createCommandBuffer(self: VulkanTriangleApp) =
+proc createCommandBuffers(self: VulkanTriangleApp) =
+    self.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
     var allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
         commandPool = self.commandPool,
         level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        commandBufferCount = 1
+        commandBufferCount = cast[uint32](self.commandBuffers.len)
     )
-    if vkAllocateCommandBuffers(self.device, addr allocInfo, addr self.commandBuffer) != VK_SUCCESS:
+    if vkAllocateCommandBuffers(self.device, addr allocInfo, addr self.commandBuffers[0]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to allocate command buffers!")
 
 proc recordCommandBuffer(self: VulkanTriangleApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
@@ -553,8 +586,8 @@ proc recordCommandBuffer(self: VulkanTriangleApp, commandBuffer: VkCommandBuffer
         viewport: VkViewport = newVkViewport(
             x = 0f,
             y = 0f,
-            width = cast[float32](self.swapChainExtent.width),
-            height = cast[float32](self.swapChainExtent.height),
+            width = self.swapChainExtent.width.float32,
+            height = self.swapChainExtent.height.float32,
             minDepth = 0f,
             maxDepth = 1f
         )
@@ -570,37 +603,49 @@ proc recordCommandBuffer(self: VulkanTriangleApp, commandBuffer: VkCommandBuffer
         quit("failed to record command buffer")
 
 proc createSyncObjects(self: VulkanTriangleApp) =
+    self.imageAvailableSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
+    self.renderFinishedSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
+    self.inFlightFences.setLen(MAX_FRAMES_IN_FLIGHT)
     var
         semaphoreInfo: VkSemaphoreCreateInfo = newVkSemaphoreCreateInfo()
         fenceInfo: VkFenceCreateInfo = newVkFenceCreateInfo(
             flags = VkFenceCreateFlags(VK_FENCE_CREATE_SIGNALED_BIT)
         )
-    if  (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.imageAvailableSemaphore) != VK_SUCCESS) or 
-        (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.renderFinishedSemaphore) != VK_SUCCESS) or 
-        (vkCreateFence(self.device, addr fenceInfo, nil, addr self.inFlightFence) != VK_SUCCESS):
-            raise newException(RuntimeException, "failed to create sync Objects!")
+    for i in countup(0,cast[int](MAX_FRAMES_IN_FLIGHT-1)):
+        if  (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.imageAvailableSemaphores[i]) != VK_SUCCESS) or 
+            (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.renderFinishedSemaphores[i]) != VK_SUCCESS) or 
+            (vkCreateFence(self.device, addr fenceInfo, nil, addr self.inFlightFences[i]) != VK_SUCCESS):
+                raise newException(RuntimeException, "failed to create sync Objects!")
 
 proc drawFrame(self: VulkanTriangleApp) =
-    discard vkWaitForFences(self.device, 1, addr self.inFlightFence, VkBool32(VK_TRUE), uint64.high)
-    discard vkResetFences(self.device, 1 , addr self.inFlightFence)
+    discard vkWaitForFences(self.device, 1, addr self.inFlightFences[self.currentFrame], VkBool32(VK_TRUE), uint64.high)
     var imageIndex: uint32
-    discard vkAcquireNextImageKHR(self.device, self.swapChain, uint64.high, self.imageAvailableSemaphore, VkFence(0), addr imageIndex)
-    discard vkResetCommandBuffer(self.commandBuffer, VkCommandBufferResetFlags(0))
-    self.recordCommandBuffer(self.commandBuffer, imageIndex)
+    let imageResult: VkResult = vkAcquireNextImageKHR(self.device, self.swapChain, uint64.high, self.imageAvailableSemaphores[self.currentFrame], VkFence(0), addr imageIndex)
+    if imageResult == VK_ERROR_OUT_OF_DATE_KHR:
+        self.recreateSwapChain();
+        return
+    elif (imageResult != VK_SUCCESS and imageResult != VK_SUBOPTIMAL_KHR):
+        raise newException(RuntimeException, "failed to acquire swap chain image!")
+
+    # Only reset the fence if we are submitting work
+    discard vkResetFences(self.device, 1 , addr self.inFlightFences[self.currentFrame])
+
+    discard vkResetCommandBuffer(self.commandBuffers[self.currentFrame], VkCommandBufferResetFlags(0))
+    self.recordCommandBuffer(self.commandBuffers[self.currentFrame], imageIndex)
     var
-        waitSemaphores: array[1, VkSemaphore] = [self.imageAvailableSemaphore]
+        waitSemaphores: array[1, VkSemaphore] = [self.imageAvailableSemaphores[self.currentFrame]]
         waitStages: array[1, VkPipelineStageFlags] = [VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)]
-        signalSemaphores: array[1, VkSemaphore] = [self.renderFinishedSemaphore]
+        signalSemaphores: array[1, VkSemaphore] = [self.renderFinishedSemaphores[self.currentFrame]]
         submitInfo: VkSubmitInfo = newVkSubmitInfo(
             waitSemaphoreCount = waitSemaphores.len.uint32,
             pWaitSemaphores = addr waitSemaphores[0],
             pWaitDstStageMask = addr waitStages[0],
             commandBufferCount = 1,
-            pCommandBuffers = addr self.commandBuffer,
+            pCommandBuffers = addr self.commandBuffers[self.currentFrame],
             signalSemaphoreCount = 1,
             pSignalSemaphores = addr signalSemaphores[0]
         )
-    if vkQueueSubmit(self.graphicsQueue, 1, addr submitInfo, self.inFlightFence) != VK_SUCCESS:
+    if vkQueueSubmit(self.graphicsQueue, 1, addr submitInfo, self.inFlightFences[self.currentFrame]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to submit draw command buffer")
     var
         swapChains: array[1, VkSwapchainKHR] = [self.swapChain]
@@ -612,7 +657,13 @@ proc drawFrame(self: VulkanTriangleApp) =
             pImageIndices = addr imageIndex,
             pResults = nil
         )
-    discard vkQueuePresentKHR(self.presentQueue, addr presentInfo)
+    let queueResult = vkQueuePresentKHR(self.presentQueue, addr presentInfo)
+    if queueResult == VK_ERROR_OUT_OF_DATE_KHR or queueResult == VK_SUBOPTIMAL_KHR or self.framebufferResized:
+        self.framebufferResized = false
+        self.recreateSwapChain();
+    elif queueResult != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to present swap chain image!")
+    self.currentFrame = (self.currentFrame + 1).mod(MAX_FRAMES_IN_FLIGHT)
 
 
 proc initVulkan(self: VulkanTriangleApp) =
@@ -626,8 +677,10 @@ proc initVulkan(self: VulkanTriangleApp) =
     self.createGraphicsPipeline()
     self.createFrameBuffers()
     self.createCommandPool()
-    self.createCommandBuffer()
+    self.createCommandBuffers()
     self.createSyncObjects()
+    self.framebufferResized = false
+    self.currentFrame = 0
 
 proc mainLoop(self: VulkanTriangleApp) =
     while not windowShouldClose(self.window):
@@ -636,18 +689,15 @@ proc mainLoop(self: VulkanTriangleApp) =
     discard vkDeviceWaitIdle(self.device);
 
 proc cleanup(self: VulkanTriangleApp) =
-    vkDestroySemaphore(self.device, self.imageAvailableSemaphore, nil)
-    vkDestroySemaphore(self.device, self.renderFinishedSemaphore, nil)
-    vkDestroyFence(self.device, self.inFlightFence, nil)
+    for i in countup(0,cast[int](MAX_FRAMES_IN_FLIGHT-1)):
+        vkDestroySemaphore(self.device, self.imageAvailableSemaphores[i], nil)
+        vkDestroySemaphore(self.device, self.renderFinishedSemaphores[i], nil)
+        vkDestroyFence(self.device, self.inFlightFences[i], nil)
     vkDestroyCommandPool(self.device, self.commandPool, nil)
-    for framebuffer in self.swapChainFramebuffers:
-        vkDestroyFramebuffer(self.device, framebuffer, nil)
     vkDestroyPipeline(self.device, self.graphicsPipeline, nil)
     vkDestroyPipelineLayout(self.device, self.pipelineLayout, nil)
     vkDestroyRenderPass(self.device, self.renderPass, nil)
-    for imageView in self.swapChainImageViews:
-        vkDestroyImageView(self.device, imageView, nil)
-    vkDestroySwapchainKHR(self.device, self.swapChain, nil)
+    self.cleanupSwapChain()
     vkDestroyDevice(self.device, nil) #destroy device before instance
     vkDestroySurfaceKHR(self.instance, self.surface, nil)
     vkDestroyInstance(self.instance, nil)
